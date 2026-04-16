@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # 1. The Redis Stack Server
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: redis-stack
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # 2. Your FastAPI Backend
+  api:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fastapi-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Pass your API keys here so you don't hardcode them
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - COHERE_API_KEY=${COHERE_API_KEY}
+      - REDIS_HOST=redis-stack
+    depends_on:
+      - redis-stack
+    restart: unless-stopped

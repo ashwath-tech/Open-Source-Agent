@@ -1,0 +1,24 @@
+# Git
+.git
+.gitignore
+
+# Python caching and environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+
+.env
+
+# Local databases and vector stores 
+# (Add whatever folder ChromaDB uses locally so you don't copy your local DB into the container)
+db/
+*.db
+*.sqlite3
+
+.vscode/
+.idea/
+.DS_Store

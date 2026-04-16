@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+pydantic
+pypdf
+chromadb
+redis
+numpy
+python-dotenv
+sentence-transformers
+langchain-core
+langchain-text-splitters
+langgraph
+tavily-python
+openai
+cohere

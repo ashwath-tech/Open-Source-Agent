@@ -1,0 +1,17 @@
+.env
+venv/
+.venv/
+env/
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+backend/chroma_db/
+*.db
+*.sqlite3
+
+.vscode/
+.idea/
+.DS_Store
