@@ -1,8 +1,8 @@
-# 🧠 Agentic RAG Pipeline with LangGraph & FastAPI
+# Agentic RAG Pipeline with LangGraph
 
 An advanced, fully asynchronous AI agent that intelligently routes queries, performs semantic caching, retrieves internal documents, and searches the web. Built using **LangGraph**, **FastAPI**, **Redis Stack**, and multiple AI models (OpenAI, Cohere).
 
-## 🚀 System Architecture & Workflow
+## System Architecture & Workflow
 
 The system utilizes an agentic workflow with parallel routing and a dedicated RAG feedback loop. 
 
@@ -63,9 +63,9 @@ flowchart TD
 Instead of blindly returning vector search results, the `rag_graph` subgraph enforces quality control:
 1. **Retrieve & Rerank:** Fetches chunks from ChromaDB and passes them through the Cohere Reranker.
 2. **Critique:** An LLM evaluates if the reranked context answers the query.
-3. **Rewrite (The Loop):** If the context is poor, the `rewriter` node mutates the search query based on the critique and loops the state back to `get_chunks`. It will break automatically after 2 loops to prevent infinite execution.
+3. **Rewrite (The Loop):** If the context is poor, the `rewriter` node changes the search query based on the critique and loops the state back to `get_chunks`. It will break automatically after 2 loops to prevent infinite execution.
 
-## 📚 Key Concepts & Learnings Applied
+## Key Concepts & Learnings Applied
 
 * **FastAPI Lifespan Events:** Managed application startup/shutdown gracefully. Used `@asynccontextmanager` to ensure the Redis index (`idx:cache`) initialized before accepting traffic.
 * **Redis Semantic Cache:** Implemented a high-performance semantic cache using Redis Stack. Uses `SentenceTransformers` and Cosine Similarity to detect conceptually similar questions, bypassing LLM execution.
@@ -74,7 +74,7 @@ Instead of blindly returning vector search results, the `rag_graph` subgraph enf
 * **Retry Policies:** Configured LangGraph `RetryPolicy` wrappers to handle transient network failures and HTTP 429 rate limits from external API providers.
 * **LangGraph State Management:** Modeled complex agentic behaviors as directed graphs with custom nodes, `operator.add` reducers, and conditional edges to create parallel execution branches.
 
-## 🐳 Running the Application Locally
+## Running the Application Locally
 
 1. Clone the repository and navigate to the project directory.
 2. Create a `.env` file in the root directory:
