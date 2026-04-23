@@ -1,7 +1,7 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from database import get_db
 
-def process(all_text, size_of_chunk = 800, overlap_percent = 0.15):
+def process(all_text, filename, size_of_chunk = 800, overlap_percent = 0.15):
   '''split using recursive text splitter'''
 
   overlap = int(size_of_chunk * overlap_percent)
@@ -11,8 +11,11 @@ def process(all_text, size_of_chunk = 800, overlap_percent = 0.15):
   if not chunks:
     return
   
-  ids = [f"{i}" for i in range(len(chunks))]
-  get_db().create_and_store(ids, chunks)
+  ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]
+
+  metadatas = [{"topic": filename} for _ in range(len(chunks))]
+
+  get_db().create_and_store(ids, chunks, metadatas)
 
   
   

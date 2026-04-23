@@ -12,6 +12,7 @@ backend/chroma_db/
 *.db
 *.sqlite3
 
+frontend/
 .vscode/
 .idea/
 .DS_Store

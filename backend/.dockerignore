@@ -22,3 +22,4 @@ db/
 .vscode/
 .idea/
 .DS_Store
+frontend/

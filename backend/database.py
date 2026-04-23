@@ -44,12 +44,13 @@ class VectorDBClient:
       return []
     return results["documents"][0]
   
-  def create_and_store(self, ids, allchunks):
+  def create_and_store(self, ids, allchunks, metadatas):
     '''store in chromadb'''
     try:
       self.collection.add(
         ids = ids,
-        documents = allchunks
+        documents = allchunks,
+        metadatas=metadatas
       )
     except:
       print("Warning: Collection reference lost. Re-initializing...")
@@ -59,7 +60,8 @@ class VectorDBClient:
       )
       self.collection.add(
         ids=ids,
-        documents=allchunks
+        documents=allchunks,
+        metadatas=metadatas
       )
   def reset_collection(self):
     """Deletes the existing RAG collection and creates a fresh one."""
