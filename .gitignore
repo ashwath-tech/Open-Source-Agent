@@ -9,6 +9,7 @@ __pycache__/
 *.so
 
 backend/chroma_db/
+backend/db
 *.db
 *.sqlite3
 
