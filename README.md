@@ -15,35 +15,43 @@ flowchart TD
     classDef decision fill:#6c5ce7,color:#fff,stroke:#a29bfe;
     classDef cache fill:#0984e3,color:#fff,stroke:#74b9ff;
     classDef endpoint fill:#d63031,color:#fff,stroke:#ff7675;
+    classDef process fill:#00b894,color:#fff,stroke:#55efc4;
 
     %% Main Nodes
     Start((START)):::endpoint
     End((END)):::endpoint
     
+    QueryRewriter[query_rewriter]:::process
     CheckCache{check_cache}:::cache
     Analyzer{analyzer}:::decision
     WebSearch[web_search]
+    WebReranker[web_reranker]
     Final[draft_final]
     StoreCache[store_cache]:::cache
 
     %% Main Graph Routing
-    Start --> CheckCache
+    Start --> QueryRewriter
+    QueryRewriter --> CheckCache
     CheckCache -- "Cache Hit (in_cache == 1)" --> End
     CheckCache -- "Cache Miss" --> Analyzer
     
     Analyzer -- "stop_now == True" --> End
     Analyzer -- "Has web_query" --> WebSearch
 
+    %% Web Branch
+    WebSearch --> WebReranker
+    WebReranker --> Final
+
     %% RAG Subgraph Definition
     subgraph RAG_Pipeline ["rag_graph (Subgraph)"]
         direction TB
         GetChunks[get_chunks]
-        Reranker[reranker]
+        Reranker{reranker}:::decision
         Critique{critique}:::decision
         Rewriter[rewriter]:::loop
 
         GetChunks --> Reranker
-        Reranker --> Critique
+        Reranker -- "Score >= 0.5" --> Critique
         
         %% The Feedback Loop
         Critique -- "break_loop == False\n(Poor Context)" --> Rewriter
@@ -52,18 +60,25 @@ flowchart TD
 
     %% Subgraph Connections
     Analyzer -- "Has rag_query" --> GetChunks
+    
+    %% Dynamic Fallback Edge
+    Reranker -- "Score < 0.5\n(Fallback Triggered)" --> WebSearch
+    
     Critique -- "break_loop == True\nOR loop_number == 2" --> Final
-    WebSearch --> Final
     
     Final --> StoreCache
     StoreCache --> End
 ```
 
-### The RAG Critique Loop Explained
-Instead of blindly returning vector search results, the `rag_graph` subgraph enforces quality control:
-1. **Retrieve & Rerank:** Fetches chunks from ChromaDB and passes them through the Cohere Reranker.
+### Advanced Pipeline Features Explained
+1. **Contextual Query Rewriting:** The query_rewriter node analyzes the user's input against the ongoing chat history. It resolves pronouns (e.g., "how do I configure it?") into standalone, vector-friendly search queries (e.g., "how to configure llfuse direct_io"), ensuring downstream retrieval is highly accurate.
+2. **The Dynamic Web Fallback:** The system acts with defensive engineering. If the rag_pipeline retrieves documents from ChromaDB but the Cohere Reranker determines the relevance score is below a strict threshold (0.5), the graph abandons the internal context to prevent hallucinations. It dynamically triggers a fallback edge, routing the query directly to the web_search node.
 2. **Critique:** An LLM evaluates if the reranked context answers the query.
-3. **Rewrite (The Loop):** If the context is poor, the `rewriter` node changes the search query based on the critique and loops the state back to `get_chunks`. It will break automatically after 2 loops to prevent infinite execution.
+3. **Rag Critique Loop:** 
+    - *Retrieve & Rerank*: Fetches chunks from the vector database and scores them.
+    - *Critique*: An LLM evaluates if the context actually answers the user's intent.
+    - *Rewrite (The Loop)*: If the context is poor, the rewriter node adjusts the search query based on the critique and loops the state back to get_chunks. It explicitly breaks after 2 loops to prevent infinite execution.
+4. **Dual-Reranking Architecture:** Reranking is applied to both internal and external data. The web_reranker node acts as a noise filter for Tavily Search results, applying Cohere's scoring model to raw web scrapes to extract only the highest-density information before final drafting.
 
 ## Key Concepts & Learnings Applied
 

@@ -45,8 +45,6 @@ async def lifespan(app: FastAPI):
 
 class ChatMemoryManager:
     def __init__(self):
-        # We create a specific client for history with decode_responses=True 
-        # so we can easily read/write JSON strings.
         REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
         self.redis = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 
@@ -55,8 +53,6 @@ class ChatMemoryManager:
         redis_key = f"chat_history:{session_id}"
         msg_data = {"type": message.type, "content": message.content}
         
-        # We use sync redis calls here since standard redis-py isn't async by default 
-        # (unless using redis.asyncio). Using asyncio.to_thread prevents blocking.
         await asyncio.to_thread(self.redis.rpush, redis_key, json.dumps(msg_data))
         await asyncio.to_thread(self.redis.expire, redis_key, 86400) # 24 hr TTL
 
@@ -78,7 +74,6 @@ class ChatMemoryManager:
         """Adds a filename to the user's session using a Redis Set to prevent duplicates."""
         redis_key = f"session_topics:{session_id}"
         
-        # SADD adds the item to a set. If it's already there, it does nothing.
         await asyncio.to_thread(self.redis.sadd, redis_key, filename)
         await asyncio.to_thread(self.redis.expire, redis_key, 86400) # 24 hr TTL
 
