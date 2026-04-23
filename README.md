@@ -10,64 +10,63 @@ Below is the execution graph representing the LangGraph state machine:
 
 ```mermaid
 flowchart TD
-    %% Define Styling
-    classDef loop stroke:#ff7675,stroke-width:3px,stroke-dasharray: 5 5;
-    classDef decision fill:#6c5ce7,color:#fff,stroke:#a29bfe;
-    classDef cache fill:#0984e3,color:#fff,stroke:#74b9ff;
-    classDef endpoint fill:#d63031,color:#fff,stroke:#ff7675;
-    classDef process fill:#00b894,color:#fff,stroke:#55efc4;
+    %% ===== Styling =====
+    classDef process fill:#00b894,color:#ffffff,stroke:#55efc4,stroke-width:1.5px;
+    classDef decision fill:#6c5ce7,color:#ffffff,stroke:#a29bfe,stroke-width:1.5px;
+    classDef cache fill:#0984e3,color:#ffffff,stroke:#74b9ff,stroke-width:1.5px;
+    classDef endpoint fill:#d63031,color:#ffffff,stroke:#ff7675,stroke-width:2px;
+    classDef loop stroke:#ff7675,stroke-width:2px,stroke-dasharray: 5 5;
 
-    %% Main Nodes
-    Start((START)):::endpoint
-    End((END)):::endpoint
-    
-    QueryRewriter[query_rewriter]:::process
-    CheckCache{check_cache}:::cache
-    Analyzer{analyzer}:::decision
-    WebSearch[web_search]
-    WebReranker[web_reranker]
-    Final[draft_final]
-    StoreCache[store_cache]:::cache
+    %% ===== Main Flow =====
+    Start((Start)):::endpoint
+    End((End)):::endpoint
 
-    %% Main Graph Routing
+    QueryRewriter["Query Rewriter"]:::process
+    CacheCheck{"Cache Hit?"}:::cache
+    Analyzer{"Analyze Query"}:::decision
+
+    WebSearch["Web Search"]:::process
+    WebRerank["Web Reranker"]:::process
+
+    Final["Draft Final Response"]:::process
+    CacheStore["Store in Cache"]:::cache
+
+    %% ===== Main Routing =====
     Start --> QueryRewriter
-    QueryRewriter --> CheckCache
-    CheckCache -- "Cache Hit (in_cache == 1)" --> End
-    CheckCache -- "Cache Miss" --> Analyzer
-    
-    Analyzer -- "stop_now == True" --> End
-    Analyzer -- "Has web_query" --> WebSearch
+    QueryRewriter --> CacheCheck
 
-    %% Web Branch
-    WebSearch --> WebReranker
-    WebReranker --> Final
+    CacheCheck -- Yes --> End
+    CacheCheck -- No --> Analyzer
 
-    %% RAG Subgraph Definition
-    subgraph RAG_Pipeline ["rag_graph (Subgraph)"]
+    Analyzer -- "Stop Early" --> End
+    Analyzer -- "Needs Web Data" --> WebSearch
+    Analyzer -- "Needs RAG" --> GetChunks
+
+    %% ===== Web Pipeline =====
+    WebSearch --> WebRerank --> Final
+
+    %% ===== RAG Subgraph =====
+    subgraph RAG_Pipeline ["RAG Pipeline"]
         direction TB
-        GetChunks[get_chunks]
-        Reranker{reranker}:::decision
-        Critique{critique}:::decision
-        Rewriter[rewriter]:::loop
 
-        GetChunks --> Reranker
-        Reranker -- "Score >= 0.5" --> Critique
-        
-        %% The Feedback Loop
-        Critique -- "break_loop == False\n(Poor Context)" --> Rewriter
-        Rewriter -- "Rewrite Query\nloop_number += 1" --> GetChunks
+        GetChunks["Retrieve Chunks"]:::process
+        Rerank{"Relevance Score ≥ 0.5?"}:::decision
+        Critique{"Context Sufficient?"}:::decision
+        Rewrite["Rewrite Query"]:::process
+
+        GetChunks --> Rerank
+
+        Rerank -- Yes --> Critique
+        Rerank -- No --> WebSearch
+
+        Critique -- Yes --> Final
+        Critique -- No --> Rewrite
+
+        Rewrite -->|"Iterate (max 2)"| GetChunks
     end
 
-    %% Subgraph Connections
-    Analyzer -- "Has rag_query" --> GetChunks
-    
-    %% Dynamic Fallback Edge
-    Reranker -- "Score < 0.5\n(Fallback Triggered)" --> WebSearch
-    
-    Critique -- "break_loop == True\nOR loop_number == 2" --> Final
-    
-    Final --> StoreCache
-    StoreCache --> End
+    %% ===== Finalization =====
+    Final --> CacheStore --> End
 ```
 
 ### Advanced Pipeline Features Explained
