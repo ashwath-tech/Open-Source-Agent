@@ -13,3 +13,5 @@ langgraph
 tavily-python
 openai
 cohere
+rank_bm25
+snowballstemmer

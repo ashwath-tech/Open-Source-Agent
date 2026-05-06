@@ -120,11 +120,16 @@ async def upload_question(ques : User_question):
   
   final_answer_object = final_state["messages"][-1]
   final_answer = final_answer_object.content
+  context_used = final_state.get("reranked_rag_context")
 
   await memory.save_message(ques.session_id, current_message)
   await memory.save_message(ques.session_id, final_answer_object)
-  
-  return {"answer": final_answer}
+
+  print("----------------------------------")
+  print(type(context_used))
+  print(context_used)
+  print("----------------------------------")
+  return {"answer": final_answer, "context": context_used}
 
 @app.post("/file-upload")
 async def upload_file(file : UploadFile, session_id: str = Form(...)):

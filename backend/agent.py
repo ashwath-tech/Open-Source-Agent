@@ -23,7 +23,6 @@ class AgentState(TypedDict):
   messages: Annotated[list[AnyMessage], operator.add]
   in_cache: int
   topics: Annotated[List[str], operator.add]
-  optimised_query: Optional[str]
   rag_query: Optional[str] = None
   initial_rag_query: Optional[str] = None
   web_query: Optional[str] = None
@@ -39,26 +38,12 @@ class AgentState(TypedDict):
 class AnalyzerChoice(BaseModel):
   stop_now : Annotated[bool, Field(description="Set to True ONLY if greeting or off-topic.")]
   stop_reply : Optional[Annotated[str, Field(description="Response to user if stop_now is True.")]] = None
-  web_query : Optional[Annotated[str, Field(description="Query to search the web.")]] = None
   rag_query : Optional[Annotated[str, Field(description="Query to search the RAG database.")]] = None
-
-  @model_validator(mode='after')
-  def validate_routing_logic(self):
-    if self.stop_now:
-      if self.web_query or self.rag_query:
-        raise ValueError("State Conflict: Cannot have search queries if stop_now is True.")
-      if not self.stop_reply:
-        raise ValueError("State Conflict: stop_reply is required if stop_now is True.")
-    
-    else:
-      if not self.web_query and not self.rag_query:
-        raise ValueError("State Conflict: Must provide at least web_query, rag_query, or both.")
-    
-    return self
 
 class GraderFormat(BaseModel):
   loop: Annotated[bool, Field(description="True if loop again")]
   critique: Optional[Annotated[str, Field(description="critique of the current context")]]
+  web_query: Optional[Annotated[str, Field(description="web query")] ]
 
 class Workflow:
   def __init__(self, embedding_model):
@@ -87,17 +72,14 @@ class Workflow:
 
     rag_graph.add_edge(START, "get_chunks")
     rag_graph.add_edge("get_chunks", "reranker")
+    rag_graph.add_edge("reranker", "critique")
     
     rag_graph.add_conditional_edges(
-        "reranker",
-        self.relevance_condition,
-        {"critique": "critique", "web": END} 
-    )
-    rag_graph.add_conditional_edges(
         "critique",
-        self.rewrite_loop_condition,
-        {"rewriter": "rewriter", "final": END} 
+        self.relevance_condition,
+        {"rewriter": "rewriter", "web": END} 
     )
+
     rag_graph.add_edge("rewriter", "get_chunks")
     
     rag_app = rag_graph.compile()
@@ -112,21 +94,21 @@ class Workflow:
     self.agentic_workflow.add_node("final", self.draft_final, retry=self.retry_policy)
     self.agentic_workflow.add_node("store_cache", self.store_in_cache)
     self.agentic_workflow.add_node("web_reranker", self.web_reranker, retry=self.retry_policy)
-    self.agentic_workflow.add_node("query_rewriter", self.query_rewriter, retry=self.retry_policy)
 
-    self.agentic_workflow.add_edge(START, "query_rewriter")
-    self.agentic_workflow.add_edge("query_rewriter", "check_cache")
-    self.agentic_workflow.add_conditional_edges(
-        "check_cache", 
-        self.cache_condition, 
-        ["analyzer", END]
-    )
+    self.agentic_workflow.add_edge(START, "analyzer")
     
     self.agentic_workflow.add_conditional_edges(
         "analyzer",
         self.parallel_router,
-        ["web_search", "rag_pipeline", END]
+        ["check_cache", END]
     )
+
+    self.agentic_workflow.add_conditional_edges(
+        "check_cache", 
+        self.cache_condition, 
+        ["rag_pipeline", END]
+    )
+
     self.agentic_workflow.add_edge("web_search", "web_reranker")
     self.agentic_workflow.add_edge("web_reranker", "final")
     self.agentic_workflow.add_conditional_edges(
@@ -139,66 +121,8 @@ class Workflow:
     self.agentic_workflow.add_edge("store_cache", END)
     self.agentic_workflow = self.agentic_workflow.compile()
 
-  async def query_rewriter(self, state):
-    messages = state.get("messages", [])
-    if not messages:
-        return {}
-
-    original_query = messages[-1].content
-
-    context_messages = messages[-6:-1] if len(messages) > 1 else []
-    
-    # Format history cleanly so the LLM knows who said what
-    history_text = "\n".join([f"{m.type.upper()}: {m.content}" for m in context_messages])
-
-    system_prompt = """You are an expert search query generator for a technical RAG (Retrieval-Augmented Generation) system.
-      Your sole task is to convert a conversational user utterance into a highly targeted, standalone search query optimized for vector database retrieval.
-
-      CORE DIRECTIVES:
-      1. Strict Entity Resolution: Replace all pronouns (it, that, they, 'the first one') with the EXACT Proper Nouns or specific terminology they refer to from the chat history. 
-      2. No Abstraction: DO NOT generalize entities.
-      3. Contextual Independence: The final output MUST make perfect sense to a search engine that has no access to the chat history.
-      4. Zero Generation: DO NOT answer the question. DO NOT add new technical concepts or keywords that the user didn't ask for.
-      5. Pass-through: If the query does NOT need any rewriting, output the exact same query.
-
-      OUTPUT FORMAT:
-      Return ONLY the raw search string. No markdown, no quotes, no conversational prefixes.
-
-      EXAMPLES:
-      History:
-      USER: How do I configure FUSE?
-      AI: You can use the llfuse or fusepy bindings. Which are you using?
-      Latest Query: the first one, specifically to bypass the kernel cache.
-      Output: configure llfuse to bypass the kernel cache
-
-      History:
-      USER: What is the Indian Constitution used for?
-      AI: It is the supreme law of India, laying down the framework of fundamental political codes...
-      Latest Query: who wrote it?
-      Output: who wrote the Indian Constitution?
-
-      History:
-      USER: What is the latency of Redis?
-      AI: Redis achieves sub-millisecond latency.
-      Latest Query: wow, that is really fast. thanks!
-      Output: wow, that is really fast. thanks!
-      """
-    user_prompt = f"Chat History:\n{history_text}\n\nLatest Query: {original_query}"
-
-    response = await self.client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-    )
-
-    print(f"DEBUG: rewritten query: {response.choices[0].message.content}")
-
-    return {"optimised_query": response.choices[0].message.content}
-
   async def store_in_cache(self, state):
-    query = state["optimised_query"]
+    query = state["initial_rag_query"]
     answer = state["messages"][-1].content
     emb_array = await asyncio.to_thread(self.embedding_model.encode, query)
     emb = emb_array.astype(np.float32).tobytes()
@@ -219,7 +143,7 @@ class Workflow:
     return {}
 
   async def get_from_redis_cache(self, state):
-    query = state['optimised_query']
+    query = state['rag_query']
     emb_array = await asyncio.to_thread(self.embedding_model.encode, query)
     query_vector = emb_array.astype(np.float32).tobytes()
     redis_query = (
@@ -253,37 +177,78 @@ class Workflow:
   def cache_condition(self, state):
     if state["in_cache"] == 1:
       return END
-    return "analyzer"
+    return "rag_pipeline"
 
   def parallel_router(self,state):
-    branches = []
-    if state.get("web_query"):
-      branches.append("web_search")
     if state.get("rag_query"):
-      branches.append("rag_pipeline")
-        
-    if not branches:
-      return [END] 
-        
-    return branches
+      return "check_cache"
+    return END
 
   async def analyzer(self, state):
-    user_query = state["optimised_query"]
+    messages = state.get("messages", [])
+    if not messages:
+        return {}
+
+    user_query = messages[-1].content
+
+    context_messages = messages[-6:-1] if len(messages) > 1 else []
+    history_text = "\n".join([f"{m.type.upper()}: {m.content}" for m in context_messages])
+
     topics = state["topics"]
     print("TOPICS :", topics)
 
-    prompt = f""" You are an expert routing analyzer. You evaluate user queries and determine the  required data sources.
-      
-      Names of PDFs in the database: {"\n".join(topics) if topics else "None"}
-      
-      1. STOP CONDITION: Set stop_now = True ONLY if the query is a generic greeting (e.g., "hello") or absolute gibberish. Provide a polite stop_reply. Do NOT stop for academic or factual questions.
-      
-      2. ROUTING LOGIC:
-        - If the query relates to the PDF's in the database, generate a 'rag_query'.
-        - If the query requires general internet knowledge, coding facts, or recent news or if the database is empty, generate a 'web_query'.
-        - If it requires both, generate both.
-      The database should always get preference.
+    prompt = f"""You are a strict routing engine for a RAG system.
+
+      Your job is to output EXACTLY ONE of the following states:
+
+      1. STOP
+      2. SEARCH
+
+      ---
+
+      RULES:
+
+      STOP:
+      - Only if the query is a greeting, small talk, or meaningless
+      - Must include a short natural reply to the user
+
+      SEARCH:
+      - Must produce a single, self-contained search query
+      - The query must be understandable WITHOUT chat history
+      - Only resolve ambiguity using history
+      - Do NOT expand, explain, or improve the query
+      - Do NOT add new information
+
+      ---
+
+      STRICT CONSTRAINTS:
+      - NEVER output both STOP and SEARCH
+      - NEVER leave required fields empty
+      - NEVER explain your reasoning
+      - Output must strictly follow the schema
+
+      ---
+
+      EXAMPLES:
+
+      [Good]
+      History: "What is Redis?"
+      Query: "who made it?"
+      → SEARCH: "who created Redis?"
+
+      [Bad]
+      → "Redis was created by..." ❌ (this is answering, not routing)
+
+      [Bad]
+      → "Tell me more about Redis creators" ❌ (added info)
+
+      ---
+
+      Now process the input.
     """
+
+    user_query = f"Chat History:\n{history_text}\n\nLatest Query: {user_query}"
+
     response = await self.client.beta.chat.completions.parse(
       model="gpt-4o-mini",
       messages=[
@@ -298,16 +263,16 @@ class Workflow:
     if parsed_response.stop_now:
       return {
         "messages": [AIMessage(content=parsed_response.stop_reply)],
-        "rag_query": None, 
-        "web_query": None
+        "rag_query": None
       }
     return {
       "rag_query": parsed_response.rag_query,
       "initial_rag_query": parsed_response.rag_query,
-      "web_query": parsed_response.web_query
     }
 
   async def tavily_search(self, state):
+
+    print(f"DEBUG: web query - {state['web_query']}")
 
     response = await asyncio.to_thread(
       self.tavily_client.search,
@@ -321,12 +286,8 @@ class Workflow:
 
   async def get_rag_chunks(self, state):
     query = state["rag_query"]
-
-    retrieved_chunks = await asyncio.to_thread(
-      get_db().get_similar,
-      query=query,
-      needed=10
-    )
+    print(f"DEBUG: rag query - {query}")
+    retrieved_chunks = await get_db().get_similar(query=query, needed=20)
 
     print(f"DEBUG: Getting RAG chunks...")
 
@@ -346,21 +307,13 @@ class Workflow:
       model="rerank-v4.0-pro",
       query=rag_query,
       documents=texts,
-      top_n=3,
+      top_n=8,
     )
 
     reranked_texts = [texts[res.index] for res in response.results]
 
-    print(f"DEBUG: Reranking....")
-    if response.results[0].relevance_score < 0.5:
-      return {
-        "reranked_rag_context": reranked_texts,
-        "fallback_to_web": True,
-        "web_query": state["initial_rag_query"]
-      }
     return {
       "reranked_rag_context": reranked_texts,
-      "fallback_to_web": False
     }
 
   async def web_reranker(self, state):
@@ -389,9 +342,9 @@ class Workflow:
     }
 
   def relevance_condition(self, state):
-    if state["fallback_to_web"]:
+    if state["break_loop"] or state.get("loop_number", 0) >= 3:
       return "web"
-    return "critique"
+    return "rewriter"
 
   async def critique(self, state):
     extracted_content = state["reranked_rag_context"]
@@ -399,16 +352,62 @@ class Workflow:
     initial = state["initial_rag_query"]
     loop_number = state["loop_number"]
     
-    system_prompt = f"""
-      Your role is to take a decision on whether the given context from a rag architecture is good and relateed to the given query.
+    system_prompt = f"""You are a strict retrieval evaluator.
 
-      The prompt has already been rewritten {loop_number}
+      Your ONLY goal:
+      Decide whether the retrieved context is sufficient to answer the query EXACTLY.
 
-      1. loop: True if the context is not good and if changes to the query can get better results, otherwise False
-      2. Critique: If you decide to loop back to change the query, provide a critique so that the query can be changed.
+      ---
 
-      Do not drift away from the user prompt.
-      You should loop only if the changes will cause good improvement
+      DEFINITION OF SUFFICIENT:
+      The context must contain:
+      - All required entities
+      - All required relationships
+      - Any numbers, dates, or attributes explicitly asked
+
+      If ANY required detail is missing → NOT sufficient.
+
+      ---
+
+      YOU MUST CHOOSE ONE:
+
+      1. LOOP
+      - Only if a BETTER query can retrieve the missing information from the database
+      - Provide a precise critique explaining:
+        - what is missing
+        - what exact keywords should be used
+
+      2. WEB
+      - If:
+        - context is irrelevant
+        - answer requires real-time or external knowledge
+        - or after multiple failed attempts
+
+      3. SUCCESS
+      - If context fully answers the query
+      - No critique, no web query
+
+      ---
+
+      STRICT RULES:
+
+      - Do NOT say "partially relevant"
+      - Do NOT be vague
+      - Do NOT suggest broad improvements
+      - Critique must directly map to a better search query
+
+      ---
+
+      EXAMPLE:
+
+      Query: "Age of Elon Musk"
+      Context: "Elon Musk is CEO of Tesla"
+      → LOOP
+      Critique: "Missing age. Query should include 'Elon Musk age'"
+
+      ---
+
+      Now evaluate.
     """
     if loop_number == 0:
       user_prompt = f"""
@@ -441,23 +440,58 @@ class Workflow:
         "break_loop": False,
         "critique": parsed_response.critique
       }
+    elif parsed_response.web_query:
+      return {
+        "fallback_to_web": True,
+        "break_loop": True,
+        "web_query": parsed_response.web_query
+      }
     return {
       "break_loop": True,
     }
-
-  def rewrite_loop_condition(self, state):
-    if state["break_loop"] or state["loop_number"] == 2:
-      return "final"
-    return "rewriter"
 
   async def rewriter(self, state):
     current_query = state["rag_query"]
     critique = state["critique"]
     system_prompt = """
-      You are a proffessional prompt rewriter.
-      You will be given an old prompt and a critique of that old prompt.
-      Your job is to fix the old prompt by referencing the critique.
-      Do not hallucinate. Rewrite only based on the critique.
+      You are a deterministic query rewriter.
+
+      Input:
+      - Original query
+      - Critique
+
+      Your job:
+      Produce a corrected query that FIXES the critique.
+
+      ---
+
+      RULES:
+
+      - Only modify parts mentioned in the critique
+      - Do NOT rephrase the entire query
+      - Do NOT add new concepts
+      - Do NOT remove original intent
+      - Output must be a single query string
+
+      ---
+
+      FAIL CONDITIONS (STRICTLY AVOID):
+
+      - Adding unrelated terms
+      - Making the query broader
+      - Changing meaning
+
+      ---
+
+      EXAMPLE:
+
+      Original: "prime minister of India"
+      Critique: "Missing age"
+      Output: "prime minister of India age"
+
+      ---
+
+      Output ONLY the rewritten query.
     """
     user_prompt = f"""
       old prompt: {current_query}
@@ -481,13 +515,13 @@ class Workflow:
     }
 
   def fallback_condition(self, state):
-    if state["fallback_to_web"] and not state.get("web_query"):
+    if state.get("fallback_to_web"):
       print("DUBUG: falling back to web search...")
       return "web_search"
     return "final"
   
   async def draft_final(self, state):
-    user_question = state["optimised_query"]
+    user_question = state["initial_rag_query"]
 
     rag_text = []
     web_text = []
@@ -497,10 +531,24 @@ class Workflow:
       web_text = state["reranked_web_context"]
 
     system_prompt = """
-      You have the most important job of compiling all the context and formatting it properly based on the users question to give a perfect response to the user. 
-      Make sure to specify where you got the context from (Eg. According to the database.... or According to the internet....)
+    You are a factual answer generator. Answer questions strictly using the provided context.
 
-      DO NOT ADD NEW DATA. USE ONLY THE GIVEN CONTEXT
+    CONTEXT PRIORITY:
+    - Database context takes full priority. If it addresses the question, ignore web context entirely.
+    - Use web context only if database context is absent or silent on the topic.
+
+    ANSWERING RULES:
+    - Use only information explicitly present in the context
+    - You may reason across multiple sentences within the context
+    - Do not use outside knowledge or make inferences beyond what the context states
+    - Keep answers concise and direct
+    - Always cite your source: "According to the database: ..." or "According to the internet: ..."
+
+    IF CONTEXT IS INSUFFICIENT:
+    - If the context partially answers the question, answer what you can and state what is missing
+    - If the context has nothing relevant, respond: "The available context is insufficient to answer this question."
+
+    Do not hallucinate. Do not generalize. Do not fabricate citations.
     """
     user_prompt = f"""
       question = {user_question}

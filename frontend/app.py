@@ -1,106 +1,151 @@
+import os
+import uuid
+import logging
+from typing import Dict, List, Optional, Any
+
 import streamlit as st
 import requests
-import uuid # <-- Added for session management
+from requests.exceptions import RequestException, Timeout
 
-# --- Configuration ---
-API_BASE_URL = "http://localhost:8000"
+# --- Configuration & Setup ---
+# Default to localhost if environment variable is not set
+API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
+REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "30")) # 30 seconds default timeout
 
-st.set_page_config(page_title="Shruthi's private assistant", page_icon="🎀", layout="centered")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- Session State Initialization ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.set_page_config(page_title="Enterprise RAG Assistant", page_icon="🤖", layout="centered")
 
-# Generate a unique session ID for this specific browser tab/user
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+# --- API Client Abstraction ---
+class RAGBackendClient:
+    """Handles all HTTP communication with the FastAPI backend."""
+    
+    def __init__(self, base_url: str, timeout: int):
+        self.base_url = base_url
+        self.timeout = timeout
+        self.session = requests.Session() # Connection pooling
 
-def add_message(role, content):
+    def upload_document(self, file_name: str, file_bytes: bytes, session_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/file-upload"
+        files = {"file": (file_name, file_bytes, "application/pdf")}
+        data = {"session_id": session_id}
+        
+        response = self.session.post(url, files=files, data=data, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def ask_question(self, question: str, session_id: str) -> str:
+        url = f"{self.base_url}/question"
+        payload = {"question": question, "session_id": session_id}
+        
+        response = self.session.post(url, json=payload, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json().get("answer", "Warning: Backend returned a 200 OK but no answer payload.")
+
+    def reset_database(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/reset"
+        response = self.session.post(url, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+# Instantiate the client
+api_client = RAGBackendClient(base_url=API_BASE_URL, timeout=REQUEST_TIMEOUT)
+
+# --- Session State Management ---
+def initialize_session_state() -> None:
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+
+def add_message(role: str, content: str) -> None:
     st.session_state.messages.append({"role": role, "content": content})
 
-# --- Sidebar Controls ---
-with st.sidebar:
-    st.title("🎀 System Controls")
-    
-    # Display the session ID just for debugging/visibility (optional)
-    st.caption(f"Session ID: {st.session_state.session_id[:8]}...")
-    
-    st.subheader("Upload Document")
-    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
-    
-    if st.button("Upload & Process", use_container_width=True):
-        if uploaded_file is not None:
-            with st.spinner("Processing PDF..."):
-                try:
-                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                    # CRITICAL FIX: Pass the session_id as form data
-                    data = {"session_id": st.session_state.session_id} 
-                    
-                    response = requests.post(f"{API_BASE_URL}/file-upload", files=files, data=data)
-                    
-                    if response.status_code == 200:
-                        st.success(f"Successfully processed {uploaded_file.name}!")
-                    else:
-                        st.error(f"Error: {response.json().get('detail', 'Unknown error')}")
-                except requests.exceptions.ConnectionError:
-                    st.error("Connection failed. Is the FastAPI backend running?")
-        else:
-            st.warning("Please select a file first.")
+def reset_frontend_session() -> None:
+    st.session_state.messages = []
+    st.session_state.session_id = str(uuid.uuid4())
 
-    st.divider()
-    
-    st.subheader("Maintenance")
-    if st.button("Reset System Database", type="primary", use_container_width=True):
-        with st.spinner("Resetting databases..."):
-            try:
-                response = requests.post(f"{API_BASE_URL}/reset")
-                if response.status_code == 200:
-                    st.session_state.messages = []  # Clear frontend chat history
-                    # Optionally generate a new session ID on reset
-                    st.session_state.session_id = str(uuid.uuid4()) 
-                    st.success("System fully reset.")
-                else:
-                    st.error(f"Reset failed: {response.text}")
-            except requests.exceptions.ConnectionError:
-                st.error("Connection failed.")
-
-# --- Main Chat Interface ---
-st.title("🌸 Shruthi's private assistant")
-st.markdown("Ask questions based on your uploaded documents.")
-
-# Display chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# Chat input
-if prompt := st.chat_input("Ask a technical question..."):
-    # Render user message
-    st.chat_message("user").markdown(prompt)
-    add_message("user", prompt)
-
-    # Fetch and render AI response
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        with st.spinner("Thinking..."):
-            try:
-                # CRITICAL FIX: Pass the session_id in the JSON payload
-                payload = {
-                    "question": prompt,
-                    "session_id": st.session_state.session_id
-                }
-                response = requests.post(f"{API_BASE_URL}/question", json=payload)
+# --- UI Components ---
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.title("System Controls")
+        st.caption(f"Session ID: {st.session_state.session_id[:8]}...")
+        
+        st.subheader("Document Ingestion")
+        uploaded_file = st.file_uploader("Upload PDF Context", type=["pdf"])
+        
+        if st.button("Process Document", use_container_width=True):
+            if uploaded_file is None:
+                st.warning("Please select a file prior to processing.")
+                return
                 
-                if response.status_code == 200:
-                    answer = response.json().get("answer", "No answer provided by the backend.")
+            with st.spinner("Vectorizing and indexing document..."):
+                try:
+                    api_client.upload_document(
+                        file_name=uploaded_file.name,
+                        file_bytes=uploaded_file.getvalue(),
+                        session_id=st.session_state.session_id
+                    )
+                    st.success(f"Successfully indexed: {uploaded_file.name}")
+                except Timeout:
+                    st.error("Upload failed: Request timed out. File might be too large or backend is unresponsive.")
+                except RequestException as e:
+                    logger.error(f"Document upload failed: {e}")
+                    st.error(f"Upload failed: {str(e)}")
+
+        st.divider()
+        st.subheader("System Maintenance")
+        if st.button("Purge System Database", type="primary", use_container_width=True):
+            with st.spinner("Flushing vector store and resetting state..."):
+                try:
+                    api_client.reset_database()
+                    reset_frontend_session()
+                    st.success("System databases successfully purged.")
+                except RequestException as e:
+                    logger.error(f"Database reset failed: {e}")
+                    st.error(f"Failed to reset system: {str(e)}")
+
+def render_chat_interface() -> None:
+    st.title("Document QA Interface")
+    st.markdown("Query the ingested document context using the integrated RAG pipeline.")
+
+    # Render existing messages
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Handle new input
+    if prompt := st.chat_input("Input technical query..."):
+        st.chat_message("user").markdown(prompt)
+        add_message("user", prompt)
+
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            with st.spinner("Generating inference..."):
+                try:
+                    answer = api_client.ask_question(
+                        question=prompt, 
+                        session_id=st.session_state.session_id
+                    )
                     message_placeholder.markdown(answer)
                     add_message("assistant", answer)
-                else:
-                    error_msg = f"API Error {response.status_code}: {response.text}"
+                    
+                except Timeout:
+                    error_msg = "Inference failed: Backend request timed out."
                     message_placeholder.error(error_msg)
                     add_message("assistant", error_msg)
-                    
-            except requests.exceptions.ConnectionError:
-                error_msg = "Failed to connect to the backend server. Ensure it is running on port 8000."
-                message_placeholder.error(error_msg)
-                add_message("assistant", error_msg)
+                except RequestException as e:
+                    logger.error(f"Inference generation failed: {e}")
+                    error_msg = f"System Error: Unable to communicate with inference backend. Details: {str(e)}"
+                    message_placeholder.error(error_msg)
+                    add_message("assistant", error_msg)
+
+# --- Main Application Execution ---
+def main() -> None:
+    initialize_session_state()
+    render_sidebar()
+    render_chat_interface()
+
+if __name__ == "__main__":
+    main()
