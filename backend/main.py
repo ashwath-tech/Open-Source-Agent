@@ -15,6 +15,7 @@ from redis.commands.search.field import VectorField, TextField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.exceptions import ResponseError
 from sentence_transformers import SentenceTransformer
+from schemas import User_question
 
 def setup_redis_cache():
     REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -31,7 +32,9 @@ def setup_redis_cache():
     except ResponseError as e:
         if "Index already exists" not in str(e):
             raise e
+
 ml_model = {}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ml_model['embedding_model'] = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -81,7 +84,6 @@ class ChatMemoryManager:
         """Retrieves all filenames associated with this session."""
         redis_key = f"session_topics:{session_id}"
         
-        # SMEMBERS returns all items in the set
         topics = await asyncio.to_thread(self.redis.smembers, redis_key)
         return list(topics)
 
@@ -91,10 +93,6 @@ file_name = []
 @app.get("/")
 def root():
   return "SystemOnline"
-
-class User_question(BaseModel):
-  question: str
-  session_id: str = "default_session"
 
 @app.post("/question")
 async def upload_question(ques : User_question):
