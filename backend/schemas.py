@@ -1,5 +1,8 @@
-from typing import TypedDict, Annotated, Optional, List, Dict, Any
+from typing import TypedDict, Annotated, Optional, List, Dict
+from langchain_core.messages import AnyMessage, AIMessage, SystemMessage
 from pydantic import BaseModel, Field, model_validator
+import operator
+
 
 class AgentState(TypedDict):
   messages: Annotated[list[AnyMessage], operator.add]

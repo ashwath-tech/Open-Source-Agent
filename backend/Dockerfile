@@ -7,7 +7,11 @@ WORKDIR /app
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install dependencies
+# Install CPU-only torch first (avoids pulling the huge CUDA build that
+# sentence-transformers/chromadb would otherwise trigger)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install the rest of the dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of your application code

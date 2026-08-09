@@ -14,4 +14,5 @@ tavily-python
 openai
 cohere
 rank_bm25
+python-multipart
 snowballstemmer

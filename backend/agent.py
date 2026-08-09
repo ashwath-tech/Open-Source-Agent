@@ -382,16 +382,17 @@ class Workflow:
 
       Now evaluate.
     """
+    extracted_text = "\n".join(extracted_content)
     if loop_number == 0:
       user_prompt = f"""
         Query: {query}
-        Context: {"\n".join(extracted_content)}
+        Context: {extracted_text}
       """
     else:
       user_prompt = f"""
         User Query: {initial}
         Rewritten Query: {query}
-        Context: {"\n".join(extracted_content)}
+        Context: {extracted_text}
       """
 
     response = await self.client.beta.chat.completions.parse(
