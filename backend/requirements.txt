@@ -10,9 +10,13 @@ sentence-transformers
 langchain-core
 langchain-text-splitters
 langgraph
+psycopg2-binary
 tavily-python
 openai
+python-jose
 cohere
 rank_bm25
 python-multipart
 snowballstemmer
+passlib[bcrypt]
+sqlalchemy

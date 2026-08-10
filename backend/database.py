@@ -8,6 +8,15 @@ import asyncio
 import redis
 import pickle
 from rank_bm25 import BM25Okapi
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import psycopg2
+
+SQLALCHEMY_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@db:5432/enterprise_rag"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 _db_instance = None
 

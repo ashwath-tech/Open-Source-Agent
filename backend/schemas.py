@@ -33,3 +33,21 @@ class GraderFormat(BaseModel):
 class User_question(BaseModel):
   question: str
   session_id: str = "default_session"
+
+class UserBase(BaseModel):
+    username: str
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: str | None = None

@@ -1,4 +1,10 @@
-from fastapi import FastAPI, UploadFile, HTTPException, Form
+from fastapi import FastAPI, UploadFile, HTTPException, Form, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from sqlalchemy.orm import Session
+from utils import verify_password, get_password_hash, create_access_token, SECRET_KEY, ALGORITHM
+from model import User
+from database import SessionLocal, engine, Base
 from pydantic import BaseModel
 import io
 from pypdf import PdfReader
@@ -15,7 +21,10 @@ from redis.commands.search.field import VectorField, TextField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.exceptions import ResponseError
 from sentence_transformers import SentenceTransformer
-from schemas import User_question
+from schemas import User_question, TokenData, Token, UserCreate, UserResponse
+
+Base.metadata.create_all(bind=engine)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 def setup_redis_cache():
     REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -94,8 +103,63 @@ file_name = []
 def root():
   return "SystemOnline"
 
+def get_user(db: Session, username: str):
+    return db.query(User).filter(User.username == username).first()
+
+def authenticate_user(db: Session, username: str, password: str):
+    user = get_user(db, username)
+    if not user:
+        return False
+    if not verify_password(password, user.hashed_password):
+        return False
+    return user
+
+def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    return user
+
+@app.post("/token", response_model=Token)
+def login_for_access_token(form_data: OAuth2PasswordBearer = Depends(), db: Session = Depends(get_db)):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/signup", response_model=UserResponse)
+def signup(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = get_user(db, username=user.username)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    hashed_password = get_password_hash(user.password)
+    db_user = User(username=user.username, hashed_password=hashed_password)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
 @app.post("/question")
-async def upload_question(ques : User_question):
+async def upload_question(ques : User_question, current_user: User = Depends(get_current_user)):
+  
   memory = ChatMemoryManager()
 
   history = await memory.get_history(session_id=ques.session_id)
@@ -130,7 +194,7 @@ async def upload_question(ques : User_question):
   return {"answer": final_answer, "context": context_used}
 
 @app.post("/file-upload")
-async def upload_file(file : UploadFile, session_id: str = Form(...)):
+async def upload_file(file : UploadFile, session_id: str = Form(...), current_user: User = Depends(get_current_user)):
   file_bytes = await file.read()
   pdf_stream = io.BytesIO(file_bytes)
   
@@ -156,7 +220,7 @@ async def upload_file(file : UploadFile, session_id: str = Form(...)):
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 
 @app.post("/reset")
-def reset_system():
+def reset_system(current_user: User = Depends(get_current_user)):
     try:
         get_db().reset_collection()
         redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
