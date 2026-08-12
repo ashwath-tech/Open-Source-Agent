@@ -17,6 +17,7 @@ The system utilizes an agentic workflow with parallel routing and a dedicated RA
 flowchart TD
     %% ===== Styling =====
     classDef process fill:#00b894,color:#ffffff,stroke:#55efc4,stroke-width:1.5px;
+    classDef auth fill:#000000,color:#ffffff,stroke:#55efc4,stroke-width:1.5px;
     classDef decision fill:#6c5ce7,color:#ffffff,stroke:#a29bfe,stroke-width:1.5px;
     classDef cache fill:#0984e3,color:#ffffff,stroke:#74b9ff,stroke-width:1.5px;
     classDef endpoint fill:#d63031,color:#ffffff,stroke:#ff7675,stroke-width:2px;
@@ -25,6 +26,7 @@ flowchart TD
     Start((Start)):::endpoint
     End((End)):::endpoint
 
+    Auth{"auth"}:::auth
     Analyzer{"Analyzer Node"}:::decision
     CheckCache{"Check Redis Cache"}:::cache
     StoreCache["Store in Cache"]:::cache
@@ -34,7 +36,8 @@ flowchart TD
     Final["Draft Final Response"]:::process
 
     %% ===== Main Routing =====
-    Start --> Analyzer
+    Start ---> Auth
+    Auth --> Analyzer
     Analyzer -- "Stop Early" --> End
     Analyzer -- "Process Query" --> CheckCache
 
